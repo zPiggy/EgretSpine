@@ -1,69 +1,92 @@
 namespace spine {
-    class AdapterTexture extends Texture {
-        public readonly spriteSheet: egret.SpriteSheet;
-
-        public constructor(bitmapData: egret.BitmapData) {
-            super(bitmapData.source);
-            let texture = new egret.Texture();
-            texture.bitmapData = bitmapData;
-            this.spriteSheet = new egret.SpriteSheet(texture);
-        }
-
-        /** NIY */
-        setFilters(minFilter: TextureFilter, magFilter: TextureFilter): void { }
-        setWraps(uWrap: TextureWrap, vWrap: TextureWrap): void { }
-        dispose(): void { }
-    }
 
     export function createSkeletonData(jsonData: string | {}, atlas: TextureAtlas) {
-        let json = new SkeletonJson(new AtlasAttachmentLoader(atlas));
-        return json.readSkeletonData(jsonData);
+        const skelJson = new SkeletonJson(new AtlasAttachmentLoader(atlas));
+        return skelJson.readSkeletonData(jsonData);
+    }
+
+    export function createSkeletonDataByBinary(binary: Uint8Array, atlas: TextureAtlas) {
+        const skelBinary = new SkeletonBinary(new AtlasAttachmentLoader(atlas));
+        return skelBinary.readSkeletonData(binary);
     }
 
     export function createTextureAtlas(atlasData: string, textures: Record<string, egret.Texture>) {
         return new TextureAtlas(atlasData, (file: string) => {
-            return new AdapterTexture(textures[file].bitmapData);
+            return new EgretTexture(textures[file]);
         });
     }
 
+    class EgretTexture extends Texture {
+        public smoothing: boolean = false;
+
+        public constructor(readonly original: egret.Texture) {
+            super(original.bitmapData.source);
+        }
+
+        public setFilters(minFilter: TextureFilter, magFilter: TextureFilter): void {
+            const { Nearest, MipMapNearestNearest } = TextureFilter;
+            const minSmoothing = minFilter !== Nearest && minFilter !== MipMapNearestNearest;
+            const magSmoothing = magFilter !== Nearest && magFilter !== MipMapNearestNearest;
+
+            this.smoothing = minSmoothing || magSmoothing;
+        }
+
+        public setWraps(uWrap: TextureWrap, vWrap: TextureWrap): void { }
+
+        public dispose(): void { }
+    }
+
+
     export class SkeletonRenderer extends egret.DisplayObjectContainer {
+        static QUAD_TRIANGLES = [0, 1, 2, 2, 3, 0];
+        // x y r g b a u v
+        static VERTEX_SIZE = 2 + 4 + 2;
+
         public readonly skeleton: Skeleton;
         public readonly skeletonData: SkeletonData;
         public readonly state: AnimationState;
         public readonly stateData: AnimationStateData;
         public readonly slotRenderers: SlotRenderer[] = [];
-        private colored: boolean = false;
 
-        static vertices = Utils.newFloatArray(8 * 1024);
-        static QUAD_TRIANGLES = [0, 1, 2, 2, 3, 0];
-        static VERTEX_SIZE = 2 + 2 + 4;
-        static clipper: SkeletonClipping = new SkeletonClipping();
+        /**双色 (默认不开启)*/
+        public twoColorTint: boolean;
+        /**颜色预乘 (默认不开启)*/
+        public premultipliedAlpha = false;
+        /**裁剪 */
+        public readonly clipper: SkeletonClipping = new SkeletonClipping();
+        /**顶点特效 (暂不支持) */
+        public vertexEffect: VertexEffect = null;       // TODO 未实现 VertexEffect 类
 
-        public constructor(skeletonData: SkeletonData) {
+
+
+        public constructor(skeletonData: SkeletonData, twoColorTint: boolean = false) {
             super();
+            this.scaleY = -1;
+            this.touchEnabled = true;
             this.skeletonData = skeletonData;
             this.stateData = new AnimationStateData(skeletonData);
             this.state = new AnimationState(this.stateData);
             this.skeleton = new Skeleton(skeletonData);
             this.skeleton.updateWorldTransform();
-            this.touchEnabled = true;
-            this.scaleY = -1;
+            this.skeleton.setSlotsToSetupPose();
+            //
+            this.premultipliedAlpha = false;
+            this.twoColorTint = twoColorTint;
 
-            for (let slot of this.skeleton.slots) {
-                let renderer = new SlotRenderer();
 
-                renderer.name = slot.data.name;
-                this.slotRenderers.push(renderer);
+            for (const slot of this.skeleton.slots) {
+                const renderer = new SlotRenderer(slot);
+
+                renderer.renderSlot(this);
                 this.addChild(renderer);
-                renderer.renderSlot(slot, this.skeleton, this.colored);
-                this.colored = renderer.colored;
-
+                this.slotRenderers.push(renderer);
             }
-            SkeletonRenderer.clipper.clipEnd();
+            this.clipper.clipEnd();
+
         }
 
-        public findSlotRenderer(name: string): SlotRenderer {
-            return this.getChildByName(name) as SlotRenderer;
+        public findSlotRenderer(name: string): SlotRenderer | undefined {
+            return this.slotRenderers.find(it => it.name === name);
         }
 
         public update(dt: number) {
@@ -71,343 +94,246 @@ namespace spine {
             this.state.apply(this.skeleton);
             this.skeleton.updateWorldTransform();
 
-            let drawOrder = this.skeleton.drawOrder;
-            let slots = this.skeleton.slots;
+            const drawOrder = this.skeleton.drawOrder;
 
             for (let i = 0; i < drawOrder.length; i++) {
-                let slot = drawOrder[i].data.index;
-                this.setChildIndex(this.slotRenderers[slot], i);
-            }
-            for (let i = 0; i < slots.length; i++) {
-                let renderer = this.slotRenderers[i];
+                const index = drawOrder[i].data.index;
+                const renderer = this.slotRenderers[index];
 
-                renderer.renderSlot(slots[i], this.skeleton, this.colored);
-                this.colored = renderer.colored;
+                if (renderer.zIndex !== i) {
+                    renderer.zIndex = i;
+                }
+                renderer.renderSlot(this);
             }
-            SkeletonRenderer.clipper.clipEnd();
+
+            this.clipper.clipEnd();
         }
     }
 
-    export class SlotRenderer extends egret.DisplayObjectContainer {
-        public colored: boolean = false;
-        private currentMesh: egret.DisplayObject;
-        private colorFilter: egret.ColorMatrixFilter;
-        private tempColor = new Color();
+    export class SlotRenderer extends egret.Mesh {
 
-        public constructor() {
+        public constructor(readonly slot: Slot) {
             super();
-            this.currentMesh = new egret.Mesh()
-            this.addChild(this.currentMesh)
+            this.name = slot.data.name;
+            let blendMode = slot.data.blendMode;
+            switch (blendMode) {
+                case BlendMode.Normal:
+                    this.blendMode = egret.BlendMode.NORMAL;
+                    break;
+                case BlendMode.Additive:
+                    this.blendMode = egret.BlendMode.ADD;
+                    break;
+                case BlendMode.Multiply:
+                    this.blendMode = egret.BlendMode.NORMAL;
+                    break;
+                case BlendMode.Screen:
+                    this.blendMode = egret.BlendMode.NORMAL;
+                    break;
+                default:
+                    this.blendMode = egret.BlendMode.NORMAL;
+                    break;
+            }
         }
 
-        public getRegionTexture(region: TextureAtlasRegion) {
-            let sheet = (region.texture as AdapterTexture).spriteSheet;
-            return sheet.$texture
-        }
+        public renderSlot(skelRender: SkeletonRenderer) {
+            const slot = this.slot;
+            const attachment = slot.getAttachment();
+            const clipper = skelRender.clipper;
+            if (attachment == null) {
+                this.visible = false;
+                clipper.clipEndWithSlot(slot);
+                return;
+            }
 
-        public renderSlot(slot: Slot, skeleton: Skeleton, colored: boolean) {
-            let bone = slot.bone;
-            let attachment = slot.getAttachment();
-            let texture: egret.Texture = null;
-            let region: TextureAtlasRegion = null;
-            let clipper = SkeletonRenderer.clipper;
+            const premultipliedAlpha = skelRender.premultipliedAlpha;
+            const twoColorTint = skelRender.twoColorTint;
+            const meshNode = this.$renderNode as egret.sys.MeshNode;
 
-            let numFloats = 0;
+            let attachmentColor: Color;
+            let uvs: number[] = meshNode.uvs;
+            let triangles: number[] = meshNode.indices;
+            let verticesXY: number[] = meshNode.vertices;
+            let texture: EgretTexture;
 
-
-            if (slot.data.blendMode == BlendMode.Additive) {
-                this.blendMode = egret.BlendMode.ADD;
+            if (attachment instanceof RegionAttachment) {
+                attachmentColor = attachment.color;
+                uvs = this.copyArray(attachment.uvs, uvs);
+                triangles = this.copyArray(SkeletonRenderer.QUAD_TRIANGLES, triangles);
+                texture = (attachment.region as TextureAtlasRegion).texture as EgretTexture;
+                verticesXY = this.getRegionAttachmentVertices(attachment, verticesXY) as number[];
+            }
+            else if (attachment instanceof MeshAttachment) {
+                attachmentColor = attachment.color;
+                uvs = this.copyArray(attachment.uvs, uvs);
+                triangles = this.copyArray(attachment.triangles, triangles);
+                texture = (attachment.region as TextureAtlasRegion).texture as EgretTexture;
+                verticesXY = this.getMeshAttachmentVertices(attachment, verticesXY) as number[];
+            }
+            else if (attachment instanceof ClippingAttachment) {
+                this.visible = false;
+                clipper.clipStart(slot, attachment);
+                return;
             }
             else {
-                this.blendMode = egret.BlendMode.NORMAL;
-            }
-
-            let vertices: ArrayLike<number> = SkeletonRenderer.vertices;
-            let triangles: Array<number> = null;
-
-            let currentName = this.currentMesh ? this.currentMesh.name : '';
-            let attachmentColor = new Color()
-            let vertexSize = clipper.isClipping() ? 2 : SkeletonRenderer.VERTEX_SIZE;
-            let regionName = attachment ? attachment.name : '';
-            if (attachment instanceof RegionAttachment) {
-                this.visible = true;
-                let regionAttachment = <RegionAttachment>attachment;
-                vertices = this.computeRegionVertices(slot, regionAttachment, false);
-                triangles = SkeletonRenderer.QUAD_TRIANGLES;
-                region = <TextureAtlasRegion>regionAttachment.region;
-                attachmentColor = attachment.color
-                numFloats = vertexSize * 4;
-                texture = this.getRegionTexture(attachment.region as TextureAtlasRegion)
-
-            } else if (attachment instanceof MeshAttachment) {
-                this.visible = true;
-                let mesh = <MeshAttachment>attachment;
-                vertices = this.computeMeshVertices(slot, mesh, false);
-                triangles = mesh.triangles;
-                region = <TextureAtlasRegion>mesh.region;
-                attachmentColor = attachment.color
-                numFloats = (mesh.worldVerticesLength >> 1) * vertexSize;
-                texture = this.getRegionTexture(attachment.region as TextureAtlasRegion)
-
-            } else {
+                // no supported attachment.
                 this.visible = false;
+                clipper.clipEndWithSlot(slot);
+                return;
             }
 
-            if (texture != null) {
-                //准备开始渲染
-                let skeleton = slot.bone.skeleton;
-                let skeletonColor = skeleton.color;
-                let slotColor = slot.color;
-
-                let alpha = skeletonColor.a * slotColor.a * attachmentColor.a;
-                let color = this.tempColor;
-                color.set(skeletonColor.r * slotColor.r * attachmentColor.r,
-                    skeletonColor.g * slotColor.g * attachmentColor.g,
-                    skeletonColor.b * slotColor.b * attachmentColor.b,
-                    alpha);
-
-                if (color.r != 1 || color.g != 1 || color.b != 1 || color.a != 1) {
-                    this.alpha = color.a
-                }
-
-                let npos = []
-                let nuvs = []
-                let ncolors = []
-                let nindices = []
-                let j = 0;
-
-                let finalVerticesLength = numFloats
-                let finalIndicesLength = triangles.length
-                let finalIndices = triangles
-                let finalVertices = vertices
-                if (clipper.isClipping()) {
-                    console.log("isClipping == ",attachment.name)
-                    finalVerticesLength = clipper.clippedVertices.length
-                    finalIndicesLength = clipper.clippedTriangles.length
-                    finalIndices = clipper.clippedTriangles
-                    finalVertices = clipper.clippedVertices
-                }
-
-                for (; j < finalVerticesLength;) {
-                    npos.push(finalVertices[j++]);
-                    npos.push(finalVertices[j++]);
-
-
-                    ncolors.push(vertices[j++]);
-                    ncolors.push(vertices[j++]);
-                    ncolors.push(vertices[j++]);
-                    ncolors.push(vertices[j++]);
-
-                    nuvs.push(vertices[j++]);
-                    nuvs.push(vertices[j++]);
-                }
-                for (j = 0; j < finalIndicesLength; j++) {
-                    nindices.push(finalIndices[j])
-                }
-
-                if (region) {
-                    //console.log("renderer.name=", attachment.name, color)
-                    this.visible = true
-                    this.drawMesh(texture, nuvs, npos, nindices, color)
-                    this.currentMesh.visible = true
-                }
-                else {
-                    this.visible = false
-                }
+            if (texture == null) {
+                this.visible = false;
+                clipper.clipEndWithSlot(slot);
+                return;
             }
+
+            // 计算裁剪
+            if (clipper.isClipping()) {
+                this.clippingVertices(clipper, uvs, verticesXY, triangles);
+            }
+
+            if (verticesXY.length == 0 || triangles.length === 0) {
+                this.visible = false;
+                clipper.clipEndWithSlot(slot);
+                return;
+            }
+
+            // TODO vertexEffect ?
+            // if (vertexEffect) { }
+
+
+            // #region 渲染
+            let darkColor = (twoColorTint && slot.darkColor) ? slot.darkColor : null;
+            this.updateColor(attachmentColor, premultipliedAlpha, darkColor);
+            this.updateRenderData(texture, uvs, verticesXY, triangles);
+
+            this.visible = true;
+            // #endregion 渲染
 
             clipper.clipEndWithSlot(slot);
+
         }
 
-        private drawMesh(texture: egret.Texture, uvs, vertices, indices, color: Color) {
-            let meshObj = this.currentMesh as egret.Mesh
-            const meshNode = meshObj.$renderNode as egret.sys.MeshNode;
-            meshNode.uvs.length = uvs.length
-            meshNode.vertices.length = vertices.length
-            meshNode.indices.length = indices.length
+        // NOTICE: CustomFilter 性能不佳
+        private updateColor(lightColor: Color, premultipliedAlpha: boolean = false, darkColor: Color = null) {
+            const skelColor = this.slot.bone.skeleton.color;
+            const slotColor = this.slot.color;
 
-            meshNode.uvs = uvs
+            const alpha = skelColor.a * slotColor.a * lightColor.a;
+            const scale = premultipliedAlpha ? 255 * alpha : 255;
+            // 0-1 转 255
+            const r = skelColor.r * slotColor.r * lightColor.r * scale;
+            const g = skelColor.g * slotColor.g * lightColor.g * scale;
+            const b = skelColor.b * slotColor.b * lightColor.b * scale;
 
-            for (let i = 0; i < vertices.length; ++i) {
-                meshNode.vertices[i] = vertices[i]
+            this.tint = (r << 16) + (g << 8) + (b | 0);
+            this.alpha = premultipliedAlpha ? 1 : alpha;
+
+            if (darkColor == null) {
+                this.filters = null;
+                return;
             }
-            //meshNode.vertices = npos
-            meshNode.indices = indices
 
-            meshNode.image = texture.bitmapData;
+            // 使用 filters drawcall 很高
+            if (darkColor.r != 1 || darkColor.g != 1 || darkColor.b != 1 || darkColor.a != 1) {
+                // TODO 未验证染色值是否需要处理 premultipliedAlpha 
+                // 0-1 转 255
+                let dr = darkColor.r * scale;
+                let dg = darkColor.g * scale;
+                let db = darkColor.b * scale;
 
-            meshNode.drawMesh(
-                texture.$bitmapX, texture.$bitmapY,
-                texture.$bitmapWidth, texture.$bitmapHeight,
-                texture.$offsetX, texture.$offsetY,
-                texture.textureWidth, texture.textureHeight
-            );
-            meshNode.imageWidth = texture.$sourceWidth;
-            meshNode.imageHeight = texture.$sourceHeight;
+                // 无效的染色滤镜
+                if (dr == 0 && dg == 0 && db == 0) {
+                    this.filters = null;
+                    return;
+                }
 
-            //color.setFromString()
-            //color.clamp()
-            meshObj.texture = texture
-
-            
-            //使用 filters drawcall 很高
-            if (color.r != 1 || color.g != 1 || color.b != 1 || color.a != 1) {
-
+                // NOTICE: spine 中的 "Tint Black" 为颜色相加
                 var colorMatrix = [
-                    color.r, 0, 0, 0, 0,
-                    0, color.g, 0, 0, 0,
-                    0, 0, color.b, 0, 0,
-                    0, 0, 0, color.a, 0
+                    1, 0, 0, 0, dr,
+                    0, 1, 0, 0, dg,
+                    0, 0, 1, 0, db,
+                    0, 0, 0, 1, 0
                 ];
                 var colorFlilter = new egret.ColorMatrixFilter(colorMatrix);
-                meshObj.filters = [colorFlilter];
+                this.filters = [colorFlilter];
             }
-
-            // let hex = this.colorHex(color)
-            // console.log("hex=", hex)
-            // meshObj.tint = hex//0x4169E1
-            meshObj.$updateVertices();
-        }
-        private colorHex(color: Color) {
-            var strHex = "0x";
-            let rgb = [color.r, color.g, color.b]
-
-            for (var i = 0; i < rgb.length; i++) {
-                var hex = Number(Math.floor(rgb[i] * 255)).toString(16);
-                if (hex.length < 2) {
-                    hex = '0' + hex;
-                }
-                strHex += hex;
-            }
-            if (strHex.length !== 8) {
-                strHex = "0xFFFFFF";
-            }
-            //console.log("Number(strHex)",Number(strHex),strHex)
-            return Number(strHex);
-        }
-        private createMesh(region: TextureAtlasRegion) {
-            let mesh = new egret.Mesh()
-            mesh.name = region.name
-            this.addChild(mesh)
-            return mesh
         }
 
-        private computeRegionVertices(slot: Slot, region: RegionAttachment, pma: boolean) {
-            let skeleton = slot.bone.skeleton;
-            let skeletonColor = skeleton.color;
-            let slotColor = slot.color;
-            let regionColor = region.color;
-            let alpha = skeletonColor.a * slotColor.a * regionColor.a;
-            let multiplier = pma ? alpha : 1;
-            let color = this.tempColor;
-            color.set(skeletonColor.r * slotColor.r * regionColor.r * multiplier,
-                skeletonColor.g * slotColor.g * regionColor.g * multiplier,
-                skeletonColor.b * slotColor.b * regionColor.b * multiplier,
-                alpha);
 
-            region.computeWorldVertices(slot.bone, SkeletonRenderer.vertices, 0, SkeletonRenderer.VERTEX_SIZE);
+        private updateRenderData(texture: EgretTexture, uvs: ArrayLike<number>, verticesXY: ArrayLike<number>, indices: ArrayLike<number>) {
+            const meshNode = this.$renderNode as egret.sys.MeshNode;
+            let egretTexture: egret.Texture = texture.original;
+            meshNode.uvs = uvs as number[];
+            meshNode.indices = indices as number[];
+            meshNode.vertices = verticesXY as number[];
 
-            let vertices = SkeletonRenderer.vertices;
-            let uvs = region.uvs;
+            this.texture = egretTexture;
+            this.$smoothing = texture.smoothing;
 
-            vertices[RegionAttachment.C1R] = color.r;
-            vertices[RegionAttachment.C1G] = color.g;
-            vertices[RegionAttachment.C1B] = color.b;
-            vertices[RegionAttachment.C1A] = color.a;
-            vertices[RegionAttachment.U1] = uvs[0];
-            vertices[RegionAttachment.V1] = uvs[1];
-
-            vertices[RegionAttachment.C2R] = color.r;
-            vertices[RegionAttachment.C2G] = color.g;
-            vertices[RegionAttachment.C2B] = color.b;
-            vertices[RegionAttachment.C2A] = color.a;
-            vertices[RegionAttachment.U2] = uvs[2];
-            vertices[RegionAttachment.V2] = uvs[3];
-
-            vertices[RegionAttachment.C3R] = color.r;
-            vertices[RegionAttachment.C3G] = color.g;
-            vertices[RegionAttachment.C3B] = color.b;
-            vertices[RegionAttachment.C3A] = color.a;
-            vertices[RegionAttachment.U3] = uvs[4];
-            vertices[RegionAttachment.V3] = uvs[5];
-
-            vertices[RegionAttachment.C4R] = color.r;
-            vertices[RegionAttachment.C4G] = color.g;
-            vertices[RegionAttachment.C4B] = color.b;
-            vertices[RegionAttachment.C4A] = color.a;
-            vertices[RegionAttachment.U4] = uvs[6];
-            vertices[RegionAttachment.V4] = uvs[7];
-
-            return vertices;
+            this.$updateVertices();
         }
 
-        private computeMeshVertices(slot: Slot, mesh: MeshAttachment, pma: boolean) {
-            let skeleton = slot.bone.skeleton;
-            let skeletonColor = skeleton.color;
-            let slotColor = slot.color;
-            let regionColor = mesh.color;
-            let alpha = skeletonColor.a * slotColor.a * regionColor.a;
-            let multiplier = pma ? alpha : 1;
-            let color = this.tempColor;
-            color.set(skeletonColor.r * slotColor.r * regionColor.r * multiplier,
-                skeletonColor.g * slotColor.g * regionColor.g * multiplier,
-                skeletonColor.b * slotColor.b * regionColor.b * multiplier,
-                alpha);
+        private getRegionAttachmentVertices(attachment: RegionAttachment, outVerticesXY?: ArrayLike<number>) {
+            outVerticesXY = outVerticesXY || [];
+            outVerticesXY.length = 8;
+            attachment.computeWorldVertices(this.slot.bone, outVerticesXY, 0, 2);
 
-            let numVertices = mesh.worldVerticesLength / 2;
-            if (SkeletonRenderer.vertices.length < mesh.worldVerticesLength) {
-                SkeletonRenderer.vertices = Utils.newFloatArray(mesh.worldVerticesLength);
-            }
-            let vertices = SkeletonRenderer.vertices;
-            mesh.computeWorldVertices(slot, 0, mesh.worldVerticesLength, vertices, 0, SkeletonRenderer.VERTEX_SIZE);
-
-            let uvs = mesh.uvs;
-            for (let i = 0, n = numVertices, u = 0, v = 2; i < n; i++) {
-                vertices[v++] = color.r;
-                vertices[v++] = color.g;
-                vertices[v++] = color.b;
-                vertices[v++] = color.a;
-                vertices[v++] = uvs[u++];
-                vertices[v++] = uvs[u++];
-                v += 2;
-            }
-
-            return vertices;
+            return outVerticesXY;
         }
 
-        private createSprite(attachment: RegionAttachment, region: TextureAtlasRegion) {
-            let sheet = (region.texture as AdapterTexture).spriteSheet;
-            let texture = sheet.getTexture(region.name) || region.rotate
-                ? sheet.createTexture(
-                    region.name,
-                    region.x, region.y,
-                    region.height, region.width,
-                    region.offsetX, region.offsetY,
-                    region.originalHeight, region.originalWidth
-                )
-                : sheet.createTexture(
-                    region.name,
-                    region.x, region.y,
-                    region.width, region.height,
-                    region.offsetX, region.offsetY,
-                    region.originalWidth, region.originalHeight
-                );
-            let sprite = new egret.Bitmap(texture);
+        private getMeshAttachmentVertices(attachment: MeshAttachment, outVerticesXY?: ArrayLike<number>) {
+            outVerticesXY = outVerticesXY || [];
+            outVerticesXY.length = attachment.worldVerticesLength;
+            attachment.computeWorldVertices(this.slot, 0, attachment.worldVerticesLength, outVerticesXY, 0, 2);
 
-            sprite.name = region.name;
-            sprite.x = attachment.x;
-            sprite.y = attachment.y;
-            sprite.anchorOffsetX = 0.5 * sprite.width;
-            sprite.anchorOffsetY = 0.5 * sprite.height;
-            sprite.scaleX = attachment.scaleX * (attachment.width / region.width);
-            sprite.scaleY = -attachment.scaleY * (attachment.height / region.height);
-            sprite.rotation = attachment.rotation;
-            if (region.rotate) {
-                sprite.rotation -= 90;
-            }
-            this.addChild(sprite);
-
-            return sprite;
+            return outVerticesXY;
         }
+
+        private clippingVertices(clipper: SkeletonClipping, uvs: ArrayLike<number>, verticesXY: ArrayLike<number>, indices: ArrayLike<number>) {
+            clipper.clipTriangles(verticesXY, verticesXY.length, indices, indices.length, uvs, new Color(1, 1, 1, 1), null, false);
+
+            // 从裁剪数据中获取新的顶点和uv
+            // x y r g b a u v
+            let clippedVertices = clipper.clippedVertices;
+            let clippedTriangles = clipper.clippedTriangles;
+
+            indices.length = clippedTriangles.length;
+            verticesXY.length = 0;
+            uvs.length = 0;
+
+            // fill indices
+            for (let i = 0; i < clippedTriangles.length; i++) {
+                indices[i] = clippedTriangles[i];
+            }
+
+            // fill uvs and vertices
+            let offset = 0;
+            let offset_1 = 0;
+            for (let i = 0; i < clippedVertices.length;) {
+                offset_1 = offset + 1;
+
+                verticesXY[offset] = clippedVertices[i];        // x
+                verticesXY[offset_1] = clippedVertices[i + 1];  // y
+
+                uvs[offset] = clippedVertices[i + 6];           // u
+                uvs[offset_1] = clippedVertices[i + 7];         // v
+
+                offset += 2;
+                i += 8;
+            }
+        }
+
+
+
+        private copyArray(srcArray: ArrayLike<number>, outArray?: number[]) {
+            outArray = outArray || [];
+            outArray.length = srcArray.length;
+            for (let i = 0; i < srcArray.length; i++) {
+                outArray[i] = srcArray[i];
+            }
+            return outArray;
+        }
+
     }
 }

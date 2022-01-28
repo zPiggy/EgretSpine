@@ -30,6 +30,10 @@
 module spine {
 	/** SkeletonBinary 类的调试标识符 */
 	export let DEBUG_SKEL_BINARY = false;
+	// NOTICE: fix spine.AttachmentType 
+	enum MyAttachmentType {
+		Region, BoundingBox, Mesh, LinkedMesh, Path, Point, Clipping
+	}
 	/** Loads skeleton data in the Spine binary format.
 	 *
 	 * See [Spine binary format](http://esotericsoftware.com/spine-binary-format) and
@@ -92,12 +96,7 @@ module spine {
 			if (skeletonData.version.length == 0) skeletonData.version = null;
 
 			DEBUG_SKEL_BINARY && console.log(`骨骼数据hash: ${skeletonData.hash} `);
-			DEBUG_SKEL_BINARY && console.log(`骨骼数据spine: v${skeletonData.version} `);	// 3.6.52
-
-			// if ("3.8.75" == skeletonData.version)
-			// 	throw new Error("Unsupported skeleton data, please export with a newer version of Spine.");
-			// skeletonData.x = input.readFloat();
-			// skeletonData.y = input.readFloat();
+			DEBUG_SKEL_BINARY && console.log(`骨骼数据spine: v${skeletonData.version} `);	// 3.6.x
 
 			skeletonData.width = input.readFloat();
 			skeletonData.height = input.readFloat();
@@ -116,11 +115,6 @@ module spine {
 			}
 
 			let n = 0;
-			// 3.6 没有 Strings
-			// // Strings.
-			// n = input.readInt(true)
-			// for (let i = 0; i < n; i++)
-			// 	input.strings.push(input.readString());
 
 			// Bones.
 			n = input.readInt(true)
@@ -157,6 +151,7 @@ module spine {
 				let darkColor = input.readInt32();	// 0x00rrggbb
 				if (darkColor != -1) {
 					data.darkColor = ColorUtils.rgb888ToColor(darkColor);
+					DEBUG_SKEL_BINARY && console.log(`${slotName} 染色值: `, data.darkColor);
 				}
 				// 3.6
 				// data.attachmentName = input.readStringRef();
@@ -253,13 +248,7 @@ module spine {
 			// Skins.
 			for (let i = 0, n = input.readInt(true); i < n; i++)
 				skeletonData.skins.push(this.readSkin(input, skeletonData, input.readString(), nonessential));
-			// // Skins.
-			// {
-			// 	let i = skeletonData.skins.length;
-			// 	Utils.setArraySize(skeletonData.skins, n = i + input.readInt(true));
-			// 	for (; i < n; i++)
-			// 		skeletonData.skins[i] = this.readSkin(input, skeletonData, false, nonessential);
-			// }
+
 			DEBUG_SKEL_BINARY && console.log("所有 skins 数据: ", skeletonData.skins);
 
 
@@ -334,9 +323,9 @@ module spine {
 
 			// let typeIndex = input.readByte();
 			// let type = SkeletonBinary.AttachmentTypeValues[typeIndex];
-			let type = input.readByte() as AttachmentType;
+			let type = input.readByte() as MyAttachmentType;
 			switch (type) {
-				case AttachmentType.Region: {
+				case MyAttachmentType.Region: {
 					let path = input.readString();
 					let rotation = input.readFloat();
 					let x = input.readFloat();
@@ -362,7 +351,7 @@ module spine {
 					region.updateOffset();
 					return region;
 				}
-				case AttachmentType.BoundingBox: {
+				case MyAttachmentType.BoundingBox: {
 					let vertexCount = input.readInt(true);
 					let vertices = this.readVertices(input, vertexCount);
 					// let color = nonessential ? input.readInt32() : 0;
@@ -376,7 +365,7 @@ module spine {
 					// if (nonessential) ColorUtils.rgba8888ToColor(color, box.color);
 					return box;
 				}
-				case AttachmentType.Mesh: {
+				case MyAttachmentType.Mesh: {
 					let path = input.readString();
 					let color = input.readInt32();
 					let vertexCount = input.readInt(true);
@@ -412,7 +401,7 @@ module spine {
 					}
 					return mesh;
 				}
-				case AttachmentType.LinkedMesh: {
+				case MyAttachmentType.LinkedMesh: {
 					let path = input.readString();
 					let color = input.readInt32();
 					let skinName = input.readString();
@@ -438,7 +427,7 @@ module spine {
 					this.linkedMeshes.push(new LinkedMesh(mesh, skinName, slotIndex, parent, inheritDeform));
 					return mesh;
 				}
-				case AttachmentType.Path: {
+				case MyAttachmentType.Path: {
 					let closed = input.readBoolean();
 					let constantSpeed = input.readBoolean();
 					let vertexCount = input.readInt(true);
@@ -459,7 +448,7 @@ module spine {
 					if (nonessential) ColorUtils.rgba8888ToColor(color, path.color);
 					return path;
 				}
-				case AttachmentType.Point: {
+				case MyAttachmentType.Point: {
 					let rotation = input.readFloat();
 					let x = input.readFloat();
 					let y = input.readFloat();
@@ -473,7 +462,7 @@ module spine {
 					if (nonessential) ColorUtils.rgba8888ToColor(color, point.color);
 					return point;
 				}
-				case AttachmentType.Clipping: {
+				case MyAttachmentType.Clipping: {
 					let endSlotIndex = input.readInt(true);
 					let vertexCount = input.readInt(true);
 					let vertices = this.readVertices(input, vertexCount);
@@ -966,6 +955,14 @@ module spine {
 			outColor.b = ((value & 0x000000ff)) / 255;
 
 			return outColor;
+		}
+
+		static colorToRGB888(color: Color) {
+			return (color.r * 255 << 16) + (color.g * 255 << 8) + (color.b * 255);
+		}
+		static colorToRGBA8888(color: Color) {
+			return (color.r * 255 << 24) + (color.g * 255 << 16) + (color.b * 255 << 8) + (color.a * 255);
+
 		}
 	}
 
