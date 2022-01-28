@@ -1,0 +1,21 @@
+{
+    "compilerOptions": {
+        "module": "System",
+        "target": "ES6",
+        "strict": false,
+        "declaration": true,
+        "sourceMap": true,
+        "inlineSources": true,
+        "outFile": "build/egret-spine.js",
+        "lib": [
+            "DOM",
+            "ES6"
+        ]
+    },
+    "include": [
+        "spine-runtimes/spine-ts/core", // spine 3.6 or 3.8
+        // "spine-runtimes/spine-ts/spine-core", // spine 4.0+
+        "src",
+        "egret-5.2.33.d.ts"
+    ]
+}

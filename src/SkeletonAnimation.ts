@@ -18,19 +18,19 @@ namespace spine {
             this.addEventListener(egret.Event.ADDED_TO_STAGE, this.onAddedToStage, this);
         }
 
-        public get flipX(): boolean {
+        public getFlipX(): boolean {
             return this.renderer.scaleX == -1;
         }
 
-        public set flipX(flip: boolean) {
+        public setFlipX(flip: boolean) {
             this.renderer.scaleX = flip ? -1 : 1;
         }
 
-        public get flipY(): boolean {
+        public getFlipY(): boolean {
             return this.renderer.scaleY == 1;
         }
 
-        public set flipY(flip: boolean) {
+        public setFlipY(flip: boolean) {
             this.renderer.scaleY = flip ? 1 : -1;
         }
 

@@ -46,35 +46,35 @@ namespace spine {
         }
 
         public waitPlayStart() {
-            return new Promise(resolve => this.once(SpineEvent.PlayStart, resolve));
+            return new Promise<any>(resolve => this.once(SpineEvent.PlayStart, resolve));
         }
 
         public waitPlayEnd() {
-            return new Promise(resolve => this.once(SpineEvent.PlayEnd, resolve));
+            return new Promise<any>(resolve => this.once(SpineEvent.PlayEnd, resolve));
         }
 
         public waitLoopStart() {
-            return new Promise(resolve => this.once(SpineEvent.LoopStart, resolve));
+            return new Promise<any>(resolve => this.once(SpineEvent.LoopStart, resolve));
         }
 
         public waitLoopEnd() {
-            return new Promise(resolve => this.once(SpineEvent.LoopEnd, resolve));
+            return new Promise<any>(resolve => this.once(SpineEvent.LoopEnd, resolve));
         }
 
         public waitInterrupt() {
-            return new Promise(resolve => this.once(SpineEvent.Interrupt, resolve));
+            return new Promise<any>(resolve => this.once(SpineEvent.Interrupt, resolve));
         }
 
         public waitTrackEnd() {
-            return new Promise(resolve => this.once(SpineEvent.TrackEnd, resolve));
+            return new Promise<any>(resolve => this.once(SpineEvent.TrackEnd, resolve));
         }
 
         public waitEvent() {
-            return new Promise(resolve => this.once(SpineEvent.Custom, resolve));
+            return new Promise<any>(resolve => this.once(SpineEvent.Custom, resolve));
         }
 
         public waitNamedEvent(name: string) {
-            return new Promise(resolve => {
+            return new Promise<any>(resolve => {
                 const callback = (event: Event) => {
                     if (event.data.name == name) {
                         this.off(SpineEvent.Custom, callback);
